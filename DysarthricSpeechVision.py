@@ -10,17 +10,17 @@ from tensorflow.keras.models import model_from_json
 from sklearn.metrics import confusion_matrix
 import os
 import seaborn as sns
+import optuna
 
 
-    
 SETTINGS_DIR = os.path.dirname(os.path.realpath('__file__'))
 
 model_name=input("Which model do you want to train/test? ")
 train_set_path = SETTINGS_DIR+'/images/Train/'
 test_set_path = SETTINGS_DIR+"/images/Test/"
-dnn_file_name_structure = SETTINGS_DIR +"/Models/cnn_"+model_name+".json"
+dnn_file_name_structure = SETTINGS_DIR + "/Models/cnn_" + model_name + ".json"
 training_dynamics_path = SETTINGS_DIR+'/Training Performance/TrainingDynamics'+model_name+'.csv'
-dnn_file_name_weights = SETTINGS_DIR +  "/Models/cnn_weight_"+model_name+".h5"
+dnn_file_name_weights = SETTINGS_DIR + "/Models/cnn_weight_"+model_name+".h5"
 
 batch_size = 64
 image_input_size = (150, 150)
@@ -29,17 +29,43 @@ print("Number of Classes:", classes)
 
 
 def model_compile(model):
-    model.compile(loss=losses.categorical_crossentropy,
-                          optimizer=optimizers.Adadelta(),
-                          metrics=['accuracy'])
-    
-def model_compile_new(model):
 
-    opt = optimizers.Adam(lr=0.001)
+    opt = optimizers.Adam(lr=0.002)
     
     model.compile(loss=losses.categorical_crossentropy,
                   optimizer=opt,
                   metrics=['accuracy'])
+
+
+def model_compile_adam(model,lr_value):
+    opt = optimizers.Adam(lr=lr_value)
+
+    model.compile(loss=losses.categorical_crossentropy,
+                  optimizer=opt,
+                  metrics=['accuracy'])
+
+
+def model_compile_rms(model,lr_value):
+    opt = optimizers.RMSprop(lr=lr_value)
+
+    model.compile(loss=losses.categorical_crossentropy,
+                  optimizer=opt,
+                  metrics=['accuracy'])
+
+
+def model_compile_sgd(model,lr_value):
+    opt = optimizers.SGD(lr=lr_value)
+
+    model.compile(loss=losses.categorical_crossentropy,
+                  optimizer=opt,
+                  metrics=['accuracy'])
+
+def model_compile_optuna(model, optimizer):
+
+    model.compile(loss=losses.categorical_crossentropy,
+                  optimizer=optimizer,
+                  metrics=['accuracy'])
+
 
 def get_model():
 
@@ -111,7 +137,7 @@ def load_model():
     model = model_from_json(loaded_model_json)
     # load weights into new model
     model.load_weights(dnn_file_name_weights)
-    model_compile_new(model)
+    model_compile(model)
     return model
 
 def save_model(model, is_max_val_inclluded=False,max_val=None, ep=None):
@@ -139,8 +165,8 @@ def save_model(model, is_max_val_inclluded=False,max_val=None, ep=None):
     
 def save_training_dynamics(epoch,history,with_header=False):
     training_dynamics=pd.DataFrame(
-        data = [ [epoch, history.history['loss'][-1] ,  history.history['accuracy'][-1],
-                history.history['val_loss'][-1],  history.history['val_accuracy'][-1] ]],
+        data = [ [epoch, history.history['loss'][-1] ,  history.history['acc'][-1],
+                history.history['val_loss'][-1],  history.history['val_acc'][-1] ]],
         columns=["Epoch","TrainingLoss", "TrainingAccuracy","ValidationLoss","ValidationAccuracy"]
     )
     if (with_header):
@@ -255,25 +281,6 @@ def manual_testing_FRR_FAR(predictions, true_labels, threshold):
     return FRR, FAR
 
 
-def calculate_EER(predictions, true_labels, thresholds):
-    eer = 0
-    for threshold in thresholds:
-        FAR, FRR = manual_testing_FRR_FAR(predictions,true_labels,threshold)
-        if abs(FAR - FRR) < 0.02:
-            eer = (FAR + FRR) / 2
-            break
-    return eer
-
-def calculate_DCF(predictions, true_labels, thresholds, Cfa, Cfr):
-    DCF = 0
-    for threshold in thresholds:
-        FAR, FRR = manual_testing_FRR_FAR(predictions, true_labels, threshold)
-        DCF_threshold = Cfa * FAR + Cfr * FRR
-        if DCF == 0 or DCF_threshold < DCF:
-            DCF = DCF_threshold
-
-    return DCF
-
 
 def plot_ROC_curve(FPR, TPR):
 
@@ -307,7 +314,7 @@ def calculate_FPR_TPR(thresholds):
     
     model = load_model()
     
-    y_probs = model.predict(test_set)
+    y_probs = model.predict_generator(test_set)
     
     
     FPRs = np.zeros((4,len(thresholds)))
@@ -381,7 +388,7 @@ def create_Confusion_Matrix():
     
     model = load_model()
     
-    y_pred = model.predict(test_set)
+    y_pred = model.predict_generator(test_set)
 
     
     y_pred = np.argmax(y_pred, axis=1)    
@@ -389,13 +396,21 @@ def create_Confusion_Matrix():
     
     cm = confusion_matrix(test_set.classes, y_pred)
 
+    print(cm)
     
     cm_df = pd.DataFrame(cm,
                         index = ['High','Low','Medium','Very Low'],
                         columns = ['High','Low','Medium','Very Low'])
-                        
+
+    cm_df.index = pd.CategoricalIndex(cm_df.index,categories=["Very Low", "Low", "Medium", "High"])
+    cm_df.sort_index(level=0, inplace=True)
+    cm_df = cm_df.reindex(columns=["Very Low", "Low", "Medium", "High"])
+
+
+    print(cm_df)
+
     plt.figure(figsize=(5,4))
-    sns.heatmap(cm_df, annot=True)
+    sns.heatmap(cm_df, annot=True, fmt='g')
     plt.title('Confusion Matrix')
     plt.ylabel('Actual Values')
     plt.xlabel('Predicted Values')
@@ -404,7 +419,138 @@ def create_Confusion_Matrix():
     return cm
 
 
-def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_changned=False):
+def mindcf():
+
+    thresholds = np.arange(0.0, 1.0, 0.01)
+    FPR, TPR = calculate_FPR_TPR(thresholds=thresholds)
+
+    normFPR = []
+    normTPR = []
+
+    FPRall = np.zeros(len(FPR[0]))
+    TPRall = np.zeros(len(TPR[0]))
+
+    for i in range(len(FPR[0])):
+        FPRall[i] += (FPR[0][i] + FPR[1][i] + FPR[2][i] + FPR[3][i]) / 4
+
+    for i in range(len(FPR[0])):
+        TPRall[i] += (TPR[0][i] + TPR[1][i] + TPR[2][i] + TPR[3][i]) / 4
+
+    FNRall = 1 - TPRall
+    # FPRall = 1 - FPRall
+
+    for fpr, tpr in zip(FPRall, TPRall):
+        normFPR.append((fpr - min(FPRall)) / (max(FPRall) - min(FPRall)))
+        normTPR.append((tpr - min(TPRall)) / (max(TPRall) - min(TPRall)))
+
+    dcf = []
+    c_miss = 1
+    c_fa = 1
+    p_target = 0.01
+
+    target = None
+    minDCF = 1.1
+    for i, (fpr, fnr) in enumerate(zip(FPRall, FNRall)):
+        dcf.append((c_miss*p_target*fnr) + (c_fa * (1 - p_target) * fpr))
+        if dcf[i] < minDCF:
+            target = i
+
+    return target
+
+def roc_curve():
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    thresholds = np.arange(0.0, 1.0, 0.01)
+    FPR, TPR = calculate_FPR_TPR(thresholds=thresholds)
+
+
+    normFPR = []
+    normTPR = []
+
+    FPRall = np.zeros(len(FPR[0]))
+    TPRall = np.zeros(len(TPR[0]))
+
+    for i in range(len(FPR[0])):
+        FPRall[i] += (FPR[0][i] + FPR[1][i] + FPR[2][i] + FPR[3][i]) / 4
+
+    for i in range(len(FPR[0])):
+        TPRall[i] += (TPR[0][i] + TPR[1][i] + TPR[2][i] + TPR[3][i]) / 4
+
+    TPRall = 1 - TPRall
+    # FPRall = 1 - FPRall
+
+    for fpr, tpr in zip(FPRall, TPRall):
+        normFPR.append((fpr - min(FPRall)) / (max(FPRall) - min(FPRall)))
+        normTPR.append((tpr - min(TPRall)) / (max(TPRall) - min(TPRall)))
+
+    print(normFPR)
+    print(normTPR)
+
+    index = 0
+
+    #calculate eer
+    from math import isclose
+    for i, (fpr, tpr) in enumerate(zip(normFPR, normTPR)):
+        print(fpr,' ', tpr)
+        if isclose(fpr, tpr, abs_tol=0.01):
+            print('i', i, '-', fpr, '=', tpr)
+            index = i
+
+    x_point = normTPR[index]
+    y_point = normFPR[index]
+
+    print('EER: ', x_point, ',', y_point)
+
+    #calculate minDCF
+    minDCF = mindcf()
+
+    plt.plot(normTPR, normFPR, 'r', lw=2)
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+
+    plt.scatter(x_point, y_point, color='red', label=f"EER {x_point}")
+    plt.annotate("EER", (normTPR[index]+0.05, normFPR[index]), fontsize=15, color='black')
+
+    plt.scatter(normTPR[index+2], normFPR[index+2], color='black', label=f"minDCF {normFPR[index+2]}")
+    plt.annotate("minDCF", (normTPR[index+2]+0.05, normFPR[index+2]-0.05), fontsize=15, color='red')
+
+    plt.xlabel('False Rejection Rate')
+    plt.ylabel('False Acceptance Rate')
+    plt.title('DET Curve')
+    plt.show()
+
+def objective(trial):
+
+    history = History()
+
+    model = get_model()
+
+    optimizer_name = trial.suggest_categorical("optimizer", ['Adam', "RMSprop", "SGD"])
+    lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
+    optimizer = getattr(optimizers, optimizer_name)(lr=lr)
+
+    model_compile_optuna(model, optimizer)
+
+    for epoch in range(20):
+        model.fit_generator(
+            training_set,
+            steps_per_epoch= training_set.samples / batch_size,
+            epochs=1,
+            validation_data=test_set,
+            callbacks=[history]
+        )
+
+        accuracy = history.history["val_acc"][-1]
+
+        trial.report(accuracy, epoch)
+
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
+
+    return accuracy
+
+
+def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_changned=False, custom=False, compiler=0, lr=0.01):
     
     is_new_dnn = False
 
@@ -429,7 +575,15 @@ def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_c
         if (os.path.exists(training_dynamics_path)) :
             os.remove(training_dynamics_path)
         is_new_dnn = True
-        model_compile_new(model)
+        if custom:
+            if compiler == 1:
+                model_compile_adam(model,lr_value=lr)
+            elif compiler == 2:
+                model_compile_rms(model, lr_value=lr)
+            elif compiler == 3:
+                model_compile_sgd(model, lr_value=lr)
+        else:
+            model_compile(model)
     
     ep = read_epoch() + 1
 
@@ -446,9 +600,9 @@ def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_c
 
     save_training_dynamics(ep, history, with_header=is_new_dnn)
 
-    max_val = history.history["val_accuracy"][-1]
+    max_val = history.history["val_acc"][-1]
 
-    while (history.history['val_loss'][-1] >= ideal_loss and history.history["val_accuracy"][-1] <= ideal_accuracy):
+    while (history.history['val_loss'][-1] >= ideal_loss and history.history["val_acc"][-1] <= ideal_accuracy):
 
         print("Epoch: ", ep)
         model.fit_generator(
@@ -463,8 +617,8 @@ def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_c
         )
 
         #Save the max model
-        if (history.history["val_accuracy"][-1] > max_val):
-            max_val = history.history["val_accuracy"][-1]
+        if (history.history["val_acc"][-1] > max_val and history.history["val_acc"][-1] > 0.80):
+            max_val = history.history["val_acc"][-1]
             save_model(model=model, is_max_val_inclluded=True, max_val=max_val, ep=ep)
         
         #Save/Overwrite model
@@ -474,7 +628,7 @@ def train(max_epoch=50, ideal_loss=0.01, ideal_accuracy=0.95, is_dnn_structure_c
         save_training_dynamics(ep,history, with_header=False)
 
         if (ep % 10 == 0):
-            if (history.history['val_accuracy'][-1] >= ideal_accuracy):
+            if (history.history['val_acc'][-1] >= ideal_accuracy):
                 break
 
         if (history.history["val_loss"][-1] < ideal_loss):
