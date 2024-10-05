@@ -390,14 +390,10 @@ def create_Confusion_Matrix():
     
     y_pred = model.predict_generator(test_set)
 
-    
     y_pred = np.argmax(y_pred, axis=1)    
 
-    
     cm = confusion_matrix(test_set.classes, y_pred)
 
-    print(cm)
-    
     cm_df = pd.DataFrame(cm,
                         index = ['High','Low','Medium','Very Low'],
                         columns = ['High','Low','Medium','Very Low'])
@@ -406,8 +402,6 @@ def create_Confusion_Matrix():
     cm_df.sort_index(level=0, inplace=True)
     cm_df = cm_df.reindex(columns=["Very Low", "Low", "Medium", "High"])
 
-
-    print(cm_df)
 
     plt.figure(figsize=(5,4))
     sns.heatmap(cm_df, annot=True, fmt='g')
@@ -418,44 +412,6 @@ def create_Confusion_Matrix():
     
     return cm
 
-
-def mindcf():
-
-    thresholds = np.arange(0.0, 1.0, 0.01)
-    FPR, TPR = calculate_FPR_TPR(thresholds=thresholds)
-
-    normFPR = []
-    normTPR = []
-
-    FPRall = np.zeros(len(FPR[0]))
-    TPRall = np.zeros(len(TPR[0]))
-
-    for i in range(len(FPR[0])):
-        FPRall[i] += (FPR[0][i] + FPR[1][i] + FPR[2][i] + FPR[3][i]) / 4
-
-    for i in range(len(FPR[0])):
-        TPRall[i] += (TPR[0][i] + TPR[1][i] + TPR[2][i] + TPR[3][i]) / 4
-
-    FNRall = 1 - TPRall
-    # FPRall = 1 - FPRall
-
-    for fpr, tpr in zip(FPRall, TPRall):
-        normFPR.append((fpr - min(FPRall)) / (max(FPRall) - min(FPRall)))
-        normTPR.append((tpr - min(TPRall)) / (max(TPRall) - min(TPRall)))
-
-    dcf = []
-    c_miss = 1
-    c_fa = 1
-    p_target = 0.01
-
-    target = None
-    minDCF = 1.1
-    for i, (fpr, fnr) in enumerate(zip(FPRall, FNRall)):
-        dcf.append((c_miss*p_target*fnr) + (c_fa * (1 - p_target) * fpr))
-        if dcf[i] < minDCF:
-            target = i
-
-    return target
 
 def roc_curve():
     import numpy as np
@@ -478,14 +434,11 @@ def roc_curve():
         TPRall[i] += (TPR[0][i] + TPR[1][i] + TPR[2][i] + TPR[3][i]) / 4
 
     TPRall = 1 - TPRall
-    # FPRall = 1 - FPRall
 
     for fpr, tpr in zip(FPRall, TPRall):
         normFPR.append((fpr - min(FPRall)) / (max(FPRall) - min(FPRall)))
         normTPR.append((tpr - min(TPRall)) / (max(TPRall) - min(TPRall)))
 
-    print(normFPR)
-    print(normTPR)
 
     index = 0
 
@@ -500,10 +453,24 @@ def roc_curve():
     x_point = normTPR[index]
     y_point = normFPR[index]
 
-    print('EER: ', x_point, ',', y_point)
+    print('EER: ', x_point)
 
-    #calculate minDCF
-    minDCF = mindcf()
+    # calculate mindcf
+    c_miss = 1
+    c_fa = 1
+    p_target = 0.05
+
+    dcf_values = []
+    min_dcf_index = 0
+
+    for i, (fpr, fnr) in enumerate(zip(normFPR, normTPR)):
+        dcf_values.append(c_miss * p_target * fpr + c_fa * (1 - p_target) * fnr)
+        if fpr < dcf_values[i] < (fpr + p_target):
+            min_dcf_index = i
+
+    print("index", min_dcf_index)
+
+    print("minDCF: ", 1 - dcf_values[min_dcf_index])
 
     plt.plot(normTPR, normFPR, 'r', lw=2)
     plt.plot([0, 1], [0, 1], 'k--', lw=2)
@@ -511,8 +478,8 @@ def roc_curve():
     plt.scatter(x_point, y_point, color='red', label=f"EER {x_point}")
     plt.annotate("EER", (normTPR[index]+0.05, normFPR[index]), fontsize=15, color='black')
 
-    plt.scatter(normTPR[index+2], normFPR[index+2], color='black', label=f"minDCF {normFPR[index+2]}")
-    plt.annotate("minDCF", (normTPR[index+2]+0.05, normFPR[index+2]-0.05), fontsize=15, color='red')
+    plt.scatter(normTPR[min_dcf_index], normFPR[min_dcf_index], color='black', label=f"minDCF {normFPR[min_dcf_index]}")
+    plt.annotate("minDCF", (normTPR[min_dcf_index]+0.05, normFPR[min_dcf_index]-0.05), fontsize=15, color='red')
 
     plt.xlabel('False Rejection Rate')
     plt.ylabel('False Acceptance Rate')
