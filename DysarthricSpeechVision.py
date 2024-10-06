@@ -413,7 +413,7 @@ def create_Confusion_Matrix():
     return cm
 
 
-def roc_curve():
+def det_curve():
     import numpy as np
     import matplotlib.pyplot as plt
 
