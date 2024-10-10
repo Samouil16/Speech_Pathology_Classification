@@ -468,7 +468,6 @@ def det_curve():
         if fpr < dcf_values[i] < (fpr + p_target):
             min_dcf_index = i
 
-    print("index", min_dcf_index)
 
     print("minDCF: ", 1 - dcf_values[min_dcf_index])
 
@@ -486,6 +485,7 @@ def det_curve():
     plt.title('DET Curve')
     plt.show()
 
+#for use with optuna
 def objective(trial):
 
     history = History()
